@@ -1,281 +1,411 @@
 ﻿USE MyStore
 GO 
----------------------------------------------------
-create FUNCTION FNC_CalculateItemSubtotal(@unit_price INT,@amount INT)
-RETURNs INT
+-------------------------------------------------------------------------------------------------------
+---------------- Kiểm tra tồn kho mặt hàng ----------------
+CREATE PROCEDURE SP_CheckInventory
+	@product_id VARCHAR(20),
+	@quantity INT
+AS
+BEGIN
+    SET NOCOUNT ON;
+	BEGIN TRANSACTION;
+	------------------------------------- Phần xử lý -------------------------------------
+	------------------ Lấy số lượng hàng tồn kho hiện tại ------------------
+	DECLARE @inStock INT
+	SET @inStock=(SELECT in_stock FROM production.inventory WHERE product_id=@product_id)
+	
+	------------------ Kiểm tra số lượng hàng mua có đảm bảo số hàng tồn kho hay không? ------------------
+	IF @quantity >@inStock
+	BEGIN
+	    ROLLBACK TRANSACTION;
+		PRINT N'Không đủ số lượng trong kho'
+		RETURN;
+	END
+	--------------------------------------------------------------------------------------
+	IF @@ERROR <>0
+	BEGIN
+		ROLLBACK TRANSACTION
+		PRINT N'Có lỗi khi Kiểm tra tồn kho mặt hàng'
+		RETURN ;
+    END
+	COMMIT TRANSACTION;
+END
+GO
+
+-------------------------------------------------------------------------------------------------------
+---------------- Tính item_subtotal cho mặt hàng ----------------
+CREATE FUNCTION FN_CalculateItemSubtotal (@amount INT,@price INT)
+RETURNS INT
 AS
 BEGIN
     DECLARE @item_subtotal INT
-	SET @item_subtotal=@unit_price*@amount
+	SET @item_subtotal=@amount*@price
 	RETURN @item_subtotal
 END
 GO 
--------------------------------------------------
-create PROCEDURE SP_InsertItem
-	@order_id VARCHAR(20),
-	@product_id VARCHAR(20),
-	@amount INT
+-------------------------------------------------------------------------------------------------------
+---------------- Tính Subtotal cho đơn hàng ----------------
+CREATE FUNCTION FN_CalculateSubtotalOrder (@subtotal_now INT,@item_subtotal INT)
+RETURNS INT
 AS
 BEGIN
-	SET NOCOUNT ON;
-	BEGIN TRANSACTION
-
-	----- Kiểm tra số lượng hàng tồn kho trước thi thêm vào đơn hàng
-	DECLARE @inStock INT
-	SELECT @inStock=i.inStock FROM production.inventory i
-	WHERE i.productId=@product_id
-
-	IF @amount>@inStock
-	BEGIN
-		----Nếu số lượng hàng tồn kho không đủ thì hủy bỏ giao dịch
-		ROLLBACK TRANSACTION
-		PRINT N'Số lượng hàng không đủ'
-		RETURN;
-    END
-	
-	----- Tính toán itemSubtotal và thêm sản phẩm vào đơn hàng
-	DECLARE @product_name VARCHAR(255), @unit_price INT,@item_subtotal INT
-
-	SELECT @product_name=productName, @unit_price=salePrice FROM production.products WHERE productId=@product_id
-	SET @item_subtotal=@unit_price*@amount
-	
-	UPDATE sales.orderDetails
-	SET productName=@product_name,unitPrice=@unit_price,itemSubtotal=@item_subtotal
-	WHERE orderId=@order_id AND productId=@product_id
-
-	IF @@ERROR <>0
-	BEGIN
-		ROLLBACK TRANSACTION
-		PRINT N'Có lỗi khi thêm sản phẩm'
-		RETURN ;
-    END
-	------ Cập nhật subtotal của đơn hàng
-	UPDATE sales.orders
-	SET subtotal=subtotal+@item_subtotal
-	WHERE orderId=@order_id
-
-	
-	IF @@ERROR <>0
-	BEGIN
-		ROLLBACK TRANSACTION
-		PRINT N'Có lỗi khi cập nhật thành tiền'
-		RETURN ;
-    END
-
-	----- Cập nhật tồn kho
-	UPDATE production.inventory
-	SET inStock=inStock-@amount
-	WHERE productId=@product_id
-
-	IF @@ERROR <>0
-	BEGIN
-		ROLLBACK TRANSACTION
-		PRINT N'Có lỗi khi cập nhật tồn kho sản phẩm'
-		RETURN ;
-    END
-
-	--- Nếu không có lỗi thì lưu lại các thay đổi
-	COMMIT TRANSACTION;
-	PRINT N'Cập nhật đơn hàng thành công'
+    DECLARE @new_subtotal INT
+	SET @new_subtotal=@subtotal_now+@item_subtotal
+	RETURN @new_subtotal
 END
 GO 
----------------------------------------------------
-create PROCEDURE SP_DeleteItem
-	@order_id VARCHAR(20),
-	@product_id VARCHAR(20),
-	@amount INT
+-------------------------------------------------------------------------------------------------------
+---------------- Tính tồn kho mặt hàng ----------------
+CREATE FUNCTION FN_CalculateInventory (@inStock_now INT,@quantity INT)
+RETURNS INT
 AS
 BEGIN
-	SET NOCOUNT ON;
-	BEGIN TRANSACTION
-	-----Cập nhật tồn kho
-	UPDATE production.inventory
-	SET inStock=inStock+@amount
-	WHERE productId=@product_id
+    DECLARE @new_inStock INT
+	SET @new_inStock=@inStock_now-@quantity
+	RETURN @new_inStock
+END
+GO 
 
-	IF @@ERROR <>0
-	BEGIN
-		ROLLBACK TRANSACTION
-		PRINT N'Cập nhật tồn kho thất bại'
-		RETURN;
-    END
+-------------------------------------------------------------------------------------------------------
+---------------- Cập nhật tồn kho mặt hàng ----------------
+CREATE PROCEDURE SP_UpdateInventory
+	@product_id VARCHAR(20),
+	@quantity INT
+AS
+BEGIN
+    SET NOCOUNT ON;
+	BEGIN TRANSACTION;
+	------------------------------------- Phần xử lý -------------------------------------
+	------------------ Tìm tồn kho hiện tại của mặt hàng ------------------
+	DECLARE @inStock_now INT
+	SET @inStock_now=(SELECT in_stock FROM production.inventory WHERE product_id=@product_id)
+
+	------------------ Tính tồn kho mới của mặt hàng ------------------
+	DECLARE @new_inStock INT
+	SET @new_inStock=dbo.FN_CalculateInventory(@inStock_now,@quantity)
 	
-	------ Cập nhật subtotal của đơn hàng
-	DECLARE @item_subtotal INT, @unit_price INT
-	SET @unit_price=(SELECT salePrice FROM production.products WHERE productId=@product_id)
-	SET @item_subtotal=dbo.FNC_CalculateItemSubtotal(@unit_price,@amount)
-
-	UPDATE sales.orders
-	SET subtotal=subtotal-@item_subtotal
-	WHERE orderId=@order_id
-
+	------------------ Cập nhật tồn kho mới cho mặt hàng ------------------
+	UPDATE production.inventory
+	SET in_stock=@new_inStock 
+	WHERE product_id=@product_id
+	--------------------------------------------------------------------------------------
 	IF @@ERROR <>0
-	BEGIN
-		ROLLBACK TRANSACTION
-		PRINT N'Cập nhật gía trị đơn hàng thất bại'
-		RETURN;
+    BEGIN
+        ROLLBACK TRANSACTION
+	PRINT N'Có lỗi khi Cập nhật tồn kho mặt hàng'
+	RETURN ;
     END
-
-	---- Ghi vào orderLogs
-	DECLARE @mod_date DATETIME=GETDATE()
-	DECLARE @mod_by VARCHAR(50)=SYSTEM_USER
-	DECLARE @subtotal INT=(SELECT subtotal FROM sales.orders WHERE orderId=@order_id)
-
 	COMMIT TRANSACTION;
-	PRINT N'Xóa sản phẩm thành công'
 END
 GO
----------------------------------------------------
-create  PROCEDURE SP_UpdateItem
+
+-------------------------------------------------------------------------------------------------------
+---------------- Quy trình thêm mặt hàng mới ----------------
+ALTER PROCEDURE SP_InsertItem
 	@order_id VARCHAR(20),
 	@product_id VARCHAR(20),
-	@newAmount INT,
-	@oldAmount INT
+	@ins_amount INT
 AS
 BEGIN
-	SET NOCOUNT ON;
-    BEGIN TRANSACTION
-	---- Trả số lượng sản phẩm cũ về kho để cập nhật hàng còn lại trong kho
-	UPDATE production.inventory
-	SET inStock=inStock+@oldAmount
-	WHERE productId=@product_id
+    SET NOCOUNT ON;
+	BEGIN TRANSACTION;
+	------------------------------------- Phần xử lý -------------------------------------
+	------------------ Kiểm tra tồn kho của mặt hàng ------------------
+	EXEC dbo.SP_CheckInventory @product_id = @product_id, -- varchar(20)
+	                           @quantity = @ins_amount     -- int
 
-	IF @@ERROR<>0
-	BEGIN
-	    ROLLBACK TRANSACTION
-		PRINT 'Có lỗi khi cập nhật kho '
-		RETURN;
-	END
+	------------------ Lấy tên và giá bán của mặt hàng ------------------
+	DECLARE @product_name NVARCHAR(255),@price INT
+	SELECT @product_name=name,@price=sale_price FROM production.products WHERE id=@product_id
 
-	----- Kiểm tra số lượng hàng tồn kho trước khi cập nhật số lượng mới
-	DECLARE @inStock INT
-	SELECT @inStock=i.inStock FROM production.inventory i
-	WHERE i.productId=@product_id
+	------------------ Tính item_subtotal của mặt hàng ------------------
+	DECLARE @item_subtotal INT
+	SET @item_subtotal=dbo.FN_CalculateItemSubtotal(@ins_amount,@price)
 
-	IF @newAmount>@inStock
-	BEGIN
-		----Nếu số lượng hàng tồn kho không đủ thì hủy bỏ giao dịch
-		ROLLBACK TRANSACTION
-		PRINT N'Số lượng hàng không đủ'
-		RETURN;
-    END
+	------------------ Cập nhật Tên và item_subtotal cho mặt hàng ------------------
+	UPDATE sales.orderDetail
+	SET product_name=@product_name,unit_price=@price,item_subtotal=@item_subtotal,created_at=GETDATE(),updated_at=GETDATE()
+	WHERE order_id=@order_id AND product_id=@product_id
 
-	------ Cập nhật item_subtotal của sản phẩm
-	DECLARE @new_item_subtotal INT, @unit_price INT
-	SELECT @unit_price=salePrice FROM production.products WHERE productId=@product_id
-	SET @new_item_subtotal=dbo.FNC_CalculateItemSubtotal(@unit_price,@newAmount)
-
-	UPDATE sales.orderDetails
-	SET itemSubtotal=@new_item_subtotal WHERE productId=@product_id AND orderId=@order_id
-
-	IF @@ERROR <>0
-	BEGIN
-		ROLLBACK TRANSACTION
-		PRINT N'Có lỗi khi cập nhật thành tiền sản phẩm'
-		RETURN ;
-    END
-	----- Cập nhật subtotal của đơn hàng
-	DECLARE @old_item_subtotal INT
-	SET @old_item_subtotal=dbo.FNC_CalculateItemSubtotal(@unit_price,@oldAmount)
-
+	------------------ Tính & Cập nhật subtotal của đơn hàng ------------------
+	------ Tìm Subtotal hiện tại của đơn hàng ------
+	DECLARE @subtotal_now INT
+	SET @subtotal_now=(SELECT subtotal FROM sales.orders WHERE id=@order_id)
+	------ Tính Subtotal mới của đơn hàng ------
+	DECLARE @new_subtotal INT
+	SET @new_subtotal=dbo.FN_CalculateSubtotalOrder(@subtotal_now,@item_subtotal)
+	------ Cập nhật Subtotal mới cho đơn hàng ------
 	UPDATE sales.orders
-	SET subtotal=subtotal-@old_item_subtotal+@new_item_subtotal
-	WHERE orderId=@order_id
+	SET subtotal=@new_subtotal,updated_at=GETDATE()
+	WHERE id=@order_id
 
+	------------------ Cập nhật tồn kho của mặt hàng ------------------
+	EXEC dbo.SP_UpdateInventory @product_id = @product_id, -- varchar(20)
+	                            @quantity = @ins_amount     -- int
+	
+	--------------------------------------------------------------------------------------
 	IF @@ERROR <>0
-	BEGIN
-		ROLLBACK TRANSACTION
-		PRINT N'Có lỗi khi cập nhật thành tiền'
-		RETURN ;
+    BEGIN
+        ROLLBACK TRANSACTION
+	PRINT N'Có lỗi khi Thêm mặt hàng mới'
+	RETURN ;
     END
-	----- Cập nhật tồn kho
-	UPDATE production.inventory
-	SET inStock=inStock-@newAmount
-	WHERE productId=@product_id
-
-	IF @@ERROR <>0
-	BEGIN
-		ROLLBACK TRANSACTION
-		PRINT N'Có lỗi khi cập nhật tồn kho sản phẩm'
-		RETURN ;
-    END
-
-	---- Ghi vào orderLogs
-	DECLARE @mod_date DATETIME=GETDATE()
-	DECLARE @mod_by VARCHAR(50)=SYSTEM_USER
-	DECLARE @subtotal INT=(SELECT subtotal FROM sales.orders WHERE orderId=@order_id)
-
-	--- Nếu không có lỗi thì lưu lại các thay đổi
 	COMMIT TRANSACTION;
-	PRINT N'Cập nhật số lượng sản phẩm thành công'
 END
-GO 
----------------------------------------------------
-create PROCEDURE SP_CheckOrderAction
+GO
+
+-------------------------------------------------------------------------------------------------------
+---------------- Quy trình xóa mặt hàng ----------------
+ALTER PROCEDURE SP_DeleteItem
 	@order_id VARCHAR(20),
 	@product_id VARCHAR(20),
-	@insAmount INT=0, 
-	@delAmount INT=0,
-	@action_type VARCHAR(3)
+	@del_amount INT
 AS
 BEGIN
-	SET NOCOUNT ON;
-    IF @action_type='ins'
+    SET NOCOUNT ON;
+	BEGIN TRANSACTION;
+	------------------------------------- Phần xử lý -------------------------------------
+	------------------ Lấy giá bán của mặt hàng ------------------
+	DECLARE @price INT
+	SELECT @price=sale_price FROM production.products WHERE id=@product_id
+
+	------------------ Tính item_subtotal bị xóa ------------------
+	DECLARE @item_subtotal INT,@d_amount INT
+	SET @d_amount=0-@del_amount
+	SET @item_subtotal=dbo.FN_CalculateItemSubtotal(@d_amount,@price)
+
+	------------------ Tính & Cập nhật subtotal của đơn hàng ------------------
+	------ Tìm Subtotal hiện tại của đơn hàng ------
+	DECLARE @subtotal_now INT
+	SET @subtotal_now=(SELECT subtotal FROM sales.orders WHERE id=@order_id)
+	------ Tính Subtotal mới của đơn hàng ------
+	DECLARE @new_subtotal INT
+	SET @new_subtotal=dbo.FN_CalculateSubtotalOrder(@subtotal_now,@item_subtotal)
+	------ Cập nhật Subtotal mới cho đơn hàng ------
+	UPDATE sales.orders
+	SET subtotal=@new_subtotal,updated_at=GETDATE()
+	WHERE id=@order_id
+
+	------------------ Cập nhật tồn kho của mặt hàng ------------------
+	EXEC dbo.SP_UpdateInventory @product_id = @product_id, -- varchar(20)
+	                            @quantity = @d_amount     -- int
+	
+	--------------------------------------------------------------------------------------
+	IF @@ERROR <>0
+    BEGIN
+        ROLLBACK TRANSACTION
+	PRINT N'Có lỗi khi Xóa mặt hàng'
+	RETURN ;
+    END
+	COMMIT TRANSACTION;
+END
+GO
+-------------------------------------------------------------------------------------------------------
+---------------- Quy trình Cập nhật số lượng mặt hàng ----------------
+ALTER PROCEDURE SP_UpdateItem
+	@order_id VARCHAR(20),
+	@product_id VARCHAR(20),
+	@ins_amount INT,
+	@del_amount INT
+AS
+BEGIN
+    SET NOCOUNT ON;
+	BEGIN TRANSACTION;
+	------------------------------------- Phần xử lý -------------------------------------
+	------------------ Kiểm tra tồn kho trước khi thay đổi số lượng mặt hàng ------------------
+	------ Cộng tồn kho số lượng bị xóa ------
+	DECLARE @d_amount INT
+	SET @d_amount=0-@del_amount
+
+	EXEC dbo.SP_UpdateInventory @product_id = @product_id, -- varchar(20)
+	                            @quantity = @d_amount     -- int
+	------ Kiểm tra tồn kho số lượng mới ------
+	EXEC dbo.SP_CheckInventory @product_id = @product_id, -- varchar(20)
+	                           @quantity = @ins_amount     -- int
+
+	------------------ Lấy giá bán của mặt hàng ------------------
+	DECLARE @price INT
+	SELECT @price=sale_price FROM production.products WHERE id=@product_id
+
+	------------------ Tính item_subtotal cũ ------------------
+	DECLARE @old_item_subtotal INT
+	SET @old_item_subtotal=dbo.FN_CalculateItemSubtotal(@d_amount,@price)
+
+	------------------ Tính item_subtotal mới ------------------
+	DECLARE @new_item_subtotal INT
+	SET @new_item_subtotal=dbo.FN_CalculateItemSubtotal(@ins_amount,@price)
+
+	------------------ Cập nhật item_subtotal mới ------------------
+	UPDATE sales.orderDetail
+	SET item_subtotal=@new_item_subtotal,updated_at=GETDATE()
+	WHERE order_id=@order_id AND product_id=@product_id
+
+	------------------ Tính & Cập nhật subtotal của đơn hàng ------------------
+	------ Tìm Subtotal hiện tại của đơn hàng ------
+	DECLARE @subtotal_now INT
+	SET @subtotal_now=(SELECT subtotal FROM sales.orders WHERE id=@order_id)
+
+	------ Tính chênh lệch giữa 2 subtotal ------
+	DECLARE @subtotal_ INT
+	SET @subtotal_=@new_item_subtotal+@old_item_subtotal
+	------ Tính subtotal mới ------
+	DECLARE @new_subtotal INT
+	SET @new_subtotal=@subtotal_now+@subtotal_
+	------ Cập nhật subtotal mới ------
+	UPDATE sales.orders
+	SET subtotal=@subtotal_now+@subtotal_,updated_at=GETDATE()
+	WHERE id=@order_id
+
+	------------------ Cập nhật tồn kho của mặt hàng ------------------
+	EXEC dbo.SP_UpdateInventory @product_id = @product_id, -- varchar(20)
+	                            @quantity = @ins_amount     -- int
+	--------------------------------------------------------------------------------------
+	IF @@ERROR <>0
+    BEGIN
+        ROLLBACK TRANSACTION
+	PRINT N'Có lỗi khi Cập nhật tồn kho mặt hàng'
+	RETURN ;
+    END
+	COMMIT TRANSACTION;
+END
+GO
+
+-------------------------------------------------------------------------------------------------------------------------
+---------------- Kiểm tra hành động ----------------
+ALTER PROCEDURE SP_CheckActionType
+	@action_type INT,
+	@order_id VARCHAR(20),
+	@product_id VARCHAR(20),
+	@ins_amount INT,
+	@del_amount INT
+AS
+BEGIN
+    SET NOCOUNT ON;
+	BEGIN TRANSACTION;
+	------------------------------------- Phần xử lý -------------------------------------
+	IF @action_type=1
 	BEGIN
+		PRINT N'Thêm mặt hàng mới'
 		EXEC dbo.SP_InsertItem @order_id = @order_id,   -- varchar(20)
 		                       @product_id = @product_id, -- varchar(20)
-		                       @amount = @insAmount       -- int
-    END
-	ELSE IF @action_type='del'
-	BEGIN
-		EXEC dbo.SP_DeleteItem @order_id = @order_id,    -- varchar(20)
-		                       @product_id = @product_id,  -- varchar(20)
-		                       @amount = @delAmount       -- int
-    END
-	ELSE 
-	BEGIN
-	    EXEC dbo.SP_UpdateItem @order_id = @order_id,   -- varchar(20)
-	                           @product_id = @product_id, -- varchar(20)
-	                           @newAmount = @insAmount,   -- int
-	                           @oldAmount = @delAmount    -- int
+		                       @ins_amount = @ins_amount   -- int
+	
 	END
+	ELSE IF @action_type=2
+	BEGIN
+	    PRINT N'Xóa mặt hàng'
+		EXEC dbo.SP_DeleteItem @order_id = @order_id,   -- varchar(20)
+		                       @product_id = @product_id, -- varchar(20)
+		                       @del_amount = @del_amount   -- int
+		
+	END
+	ELSE IF @action_type=3
+	BEGIN
+	    PRINT N'Cập nhật số lượng mặt hàng'
+		EXEC dbo.SP_UpdateItem @order_id = @order_id,   -- varchar(20)
+		                       @product_id = @product_id, -- varchar(20)
+		                       @ins_amount = @ins_amount,  -- int
+		                       @del_amount = @del_amount   -- int
+		
+	END
+	--------------------------------------------------------------------------------------
+	IF @@ERROR <>0
+    BEGIN
+        ROLLBACK TRANSACTION
+	PRINT N'Có lỗi khi kiểm tra hành động'
+	RETURN ;
+    END
+	COMMIT TRANSACTION;
 END
-GO 
----------------------------------------------------
-CREATE TRIGGER TG_UpdateOrderDetail
-ON sales.orderDetails
-AFTER INSERT,UPDATE,DELETE
+GO
+
+-------------------------------------------------------------------------------------------------------------------------
+---------------- Tọa trigger cho bảng orderDetail ----------------
+CREATE TRIGGER TG_DefineActionType
+ON sales.orderDetail
+AFTER INSERT,DELETE,UPDATE
 AS
 BEGIN
-	SET NOCOUNT ON;
-    DECLARE @order_id VARCHAR(20), @product_id VARCHAR(20), @product_name VARCHAR(20), @insAmount INT=0,@delAmount INT=0, @unit_price INT
-	DECLARE @action_type VARCHAR(3)
-
-	IF EXISTS(SELECT * FROM Inserted)
+	------------------ ? ------------------
+	DECLARE @action_type INT,@order_id VARCHAR(20),@product_id VARCHAR(20), @ins_amount INT=0,@del_amount INT =0
+	------------------ ? ------------------
+	IF EXISTS(SELECT product_id FROM Inserted)
 	BEGIN
-		IF EXISTS(SELECT * FROM Deleted)
+		------ Hành động Update ------
+	    IF EXISTS(SELECT product_id FROM Deleted)
 		BEGIN
-			SELECT @order_id=i.orderId,@product_id=i.productId,@insAmount=i.amount FROM Inserted i
-			SELECT @delAmount=d.amount FROM Deleted d
-			SET @action_type='upd'
-        END
+		    SET @action_type=3
+			SELECT	@del_amount=d.amount FROM Deleted d
+			SELECT	@order_id=i.order_id, @product_id=i.product_id,@ins_amount=i.amount FROM Inserted i
+		END
+		------ Hành động Insert ------
 		ELSE
         BEGIN
-			SELECT @order_id=i.orderId,@product_id=i.productId,@insAmount=i.amount FROM Inserted i
-            SET @action_type='ins'
+            SET @action_type=1
+			SELECT	@order_id=i.order_id, @product_id=i.product_id,@ins_amount=i.amount FROM Inserted i
         END
-    END
+	END
+	------ Hành động Delete ------
 	ELSE
-    BEGIN
-		SELECT @order_id=d.orderId,@product_id=d.productId,@delAmount=d.amount FROM Deleted d
-        SET @action_type='del'
-    END
-
-	EXEC dbo.SP_CheckOrderAction @order_id = @order_id,     -- varchar(20)
-	                             @product_id = @product_id,   -- varchar(20)
-	                             @insAmount = @insAmount,     -- int
-	                             @delAmount = @delAmount,    -- int
-	                             @action_type =@action_type    -- varchar(3)
+	BEGIN
+	    SET @action_type=2
+		SELECT	@order_id=d.order_id, @product_id=d.product_id,@del_amount=d.amount FROM Deleted d
+	END
 	
+	------------------ Chạy quy trình kiểm tra hành động ------------------
+	EXEC dbo.SP_CheckActionType @action_type = @action_type, -- int
+	                            @order_id = @order_id,   -- varchar(20)
+	                            @product_id = @product_id, -- varchar(20)
+	                            @ins_amount = @ins_amount,  -- int
+	                            @del_amount = @del_amount   -- int
 END
 GO 
+
+-------------------------------------------------------------------------------------------------------------------------
+INSERT INTO sales.orders
+(
+    id,
+    store,
+    employee,
+    subtotal,
+    tax,
+    discount,
+    total_payment,
+    payment_method,
+    shipping_method,
+    status,
+    created_at,
+    updated_at
+)
+VALUES
+(   '001',      -- id - varchar(20)
+    'WH0010',    -- store - varchar(20)
+    'MR2558',    -- employee - varchar(20)
+    0, -- subtotal - int
+    0, -- tax - int
+    0, -- discount - int
+    0, -- total_payment - int
+    1,    -- payment_method - int
+    1,    -- shipping_method - int
+    0, -- status - int
+    GETDATE(),    -- created_at - datetime
+    GETDATE()     -- updated_at - datetime
+    )
+DELETE sales.orderDetail
+UPDATE production.inventory
+SET in_stock=100
+UPDATE sales.orders
+SET subtotal=0
+
+INSERT INTO sales.orderDetail (order_id,product_id,amount) VALUES('001','PROD002',10)
+INSERT INTO sales.orderDetail (order_id,product_id,amount) VALUES('001','PROD004',10)
+INSERT INTO sales.orderDetail (order_id,product_id,amount) VALUES('001','PROD005',10)
+
+DELETE sales.orderDetail WHERE order_id='001' AND product_id='PROD002'
+
+UPDATE sales.orderDetail SET amount=5 WHERE order_id='001' AND product_id='PROD004'
+
+SELECT * FROM sales.orders
+SELECT * FROM sales.orderDetail
+SELECT * FROM production.inventory
+SELECT * FROM production.products

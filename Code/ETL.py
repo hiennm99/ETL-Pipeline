@@ -33,18 +33,28 @@ def extract_data():
     
     # Get the last_update record in datawarehouse
     try:
-        query1=f"""SELECT max(last_update) FROM public.orders"""
-        last_update_dwh=pd.read_sql_query(query1,con=dwh_engine)['max'].loc[0].strftime("%Y-%m-%d 23:59:59")
+        query1=f"""SELECT last_update FROM public.orders"""
+        dwh_data=pd.read_sql_query(query1,con=dwh_engine)
+        
     except Exception as e:
         print(e)
     
-    # Get all records which have updatedAt > last_update
-    try:
-        query2=f"""SELECT * FROM cdc.sales_orders_CT WHERE updatedAt >'{last_update_dwh}'"""
-        df=pd.read_sql_query(query2,con=db_engine)
-    except Exception as e:
-        print(e)
-    
+    if not dwh_data.empty:
+        last_update_dwh=dwh_data['last_update'].max().strftime("%Y-%m-%d")
+        # Get all records which have updatedAt > last_update
+        try:
+            query2=f"""SELECT * FROM cdc.sales_orders_CT WHERE updatedAt >='{last_update_dwh}'"""
+            df=pd.read_sql_query(query2,con=db_engine)
+        except Exception as e:
+            print(e)
+    else:
+        # Get all records from database
+        try:
+            query2=f"""SELECT * FROM cdc.sales_orders_CT"""
+            df=pd.read_sql_query(query2,con=db_engine)
+        except Exception as e:
+            print(e)      
+            
     print("Extract data from database successfully !!!")
     rawData=f'raw_{runTime}.parquet'
     df.to_parquet(rawData)
@@ -54,7 +64,7 @@ def transform_data():
     df=pd.read_parquet(rawFilename)
     
     #Drop temporate columns
-    df=df.drop(columns=['__$start_lsn','__$end_lsn','__$seqval','__$update_mask','__$command_id','createdAt'])
+    df=df.drop(columns=['__$start_lsn','__$end_lsn','__$seqval','__$update_mask','__$command_id','id','createdAt'])
     
     #Rename columms with datawarehouse format
     df=df.rename(columns={
@@ -124,8 +134,6 @@ if __name__ == '__main__':
     config=ConfigParser()
     config.read('config.ini')
     runTime=datetime.datetime.now().strftime("%Y_%m_%d")
-    os.mkdir(f'./{runTime}')
     extract_data()
     transform_data()
     load_data()
-    os.rmdir(f'./{runTime}')
