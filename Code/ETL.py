@@ -2,6 +2,7 @@ import pandas as pd
 from configparser import ConfigParser
 from sqlalchemy import create_engine
 from datetime import datetime
+import time 
 
 def connect_database():
     db_host=config['DB']['hostname']
@@ -33,26 +34,27 @@ def extract_data():
     
     # Get the last_update of the table from Datawarehouse
     try:
-        query1=f"""SELECT MAX(updated_at) as last_update FROM public.d_updatelogs WHERE tbl_name='f_orders'"""
+        query1=f"""SELECT MAX(updated_at) as last_update FROM logs.update_log WHERE table_name='orders'"""
         dwh_data=pd.read_sql_query(query1,con=dwh_engine)
         
     except Exception as e:
         print(e)
     
     
-    if not dwh_data.empty:
+    if dwh_data['last_update'][0] != None:
         # If the datawarehouse is not empty
         last_update_dwh=dwh_data['last_update'][0].strftime("%Y-%m-%d %H:%M:%S")
         
-        # Get all records which have updated_at > last_update
-        try:
-            query2=f"""SELECT * FROM sales.orders WHERE updated_at <='{last_update_dwh}'"""
-            df=pd.read_sql_query(query2,con=db_engine)
-        except Exception as e:
-            print(e)
     else:
         # If the datawarehouse is empty
         last_update_dwh=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # Get all records which have updated_at > last_update
+    try:
+        query2=f"""SELECT * FROM sales.orders WHERE updated_at <='{last_update_dwh}'"""
+        df=pd.read_sql_query(query2,con=db_engine)
+    except Exception as e:
+        print(e)
             
     print("Extracted data successfully !!!")
     raw_file=f'raw_{runTime}.parquet'
@@ -68,12 +70,37 @@ def remove_duplicates(dataframe,columns):
 def handle_missing_values(dataframe,fill_values):
     return dataframe.fillna(fill_values)
 
+# Function to check integrity of data
+def check_data_integrity(dataframe):
+    
+    integrity_count=0
+    # Check duplicate values
+    duplicate_rows=dataframe[dataframe.duplicated()]
+    if duplicate_rows.shape[0]==0:
+        integrity_count+=1
+        print("No duplicate values found!!!")
+    else:
+        print(f"{duplicate_rows.shape[0]} Duplicate values found!!!")
+        
+    # Check missing values
+    missing_rows=dataframe[dataframe.isnull()]
+    if missing_rows.shape[0]==0:
+        integrity_count+=1
+        print("No missing values found!!!")
+    else:
+        print(f"{missing_rows.shape[0]} Missing values found!!!")
+    
+    if integrity_count==1:
+        return True
+    else:
+        return False
+
 # Function to define what record type? (New record or Old record)
 def define_record_type(extracted_data):
     dwh_engine=connect_datawarehouse()
     
     # Get all existing records in datawarehouse
-    existing_data = pd.read_sql('SELECT * FROM f_orders', con=dwh_engine)
+    existing_data = pd.read_sql('SELECT * FROM sales.orders', con=dwh_engine)
     
     # Compare existing records with extracted records
     existing_records = pd.merge(existing_data, extracted_data, on='id', how='inner')
@@ -95,17 +122,23 @@ def transform_data():
     # Handle missing values
     transformed_data=handle_missing_values(dataframe=transformed_data,fill_values='N/A')
     
-    print("Transformed data successfully !!!")
-    transform_file=f'transformed_{runTime}.parquet'
-    transformed_data.to_parquet(transform_file)
+    # Check integrity of data
+    if check_data_integrity(dataframe=transformed_data):
+        print("Transformed data successfully !!!")
+        transform_file=f'transformed_{runTime}.parquet'
+        transformed_data.to_parquet(transform_file)
+    else:
+        print("Data integrity check failed")
 
 def load_data():
     dwh_engine=connect_datawarehouse()
     
     # Create dataframe from transformed data
     transform_file=f'transformed_{runTime}.parquet'
-    transformed_data=pd.read_parquet(transform_file)
-    
+    try:
+        transformed_data=pd.read_parquet(transform_file)
+    except Exception as e:
+        print(e)
     # Number of transformed records
     transformed_count=transformed_data.shape[0]
     
@@ -122,10 +155,10 @@ def load_data():
     if new_count>0:
         new_records['created_at']=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         new_records['updated_at']=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        new_records.to_sql('f_orders', con=dwh_engine, if_exists='append', index=False)
+        new_records.to_sql(name='orders', schema='sales', con=dwh_engine, if_exists='append', index=False)
     
     # Get number of inserted record successfully
-    query=f"""SELECT COUNT(*) FROM f_orders"""
+    query=f"""SELECT COUNT(*) FROM sales.orders"""
     result=dwh_engine.execute(query)
     inserted_count = result.fetchone()[0]
     inserted_count=inserted_count-old_count
@@ -150,7 +183,7 @@ def load_data():
                 shipping_method=row[1]['shipping_method']
                 status=row[1]['status']
                 updated_at=f"""'{datetime.now().strftime("%Y-%m-%d %H:%M:%S")}'"""
-                query3=f"""UPDATE f_orders SET store={store}, employee={employee}, customer={customer},
+                query3=f"""UPDATE sales.orders SET store={store}, employee={employee}, customer={customer},
                                             subtotal={subtotal}, tax={tax}, discount={discount},
                                             total_payment={total_payment}, payment_method={payment_method},
                                             shipping_method={shipping_method}, status={status}, updated_at={updated_at}
@@ -167,11 +200,23 @@ def load_data():
     # Check loaded records with transformed records
     if loaded_count==transform_data:
         print("All records loaded successfully!!!")
+        
+    # Insert upload timestamp to update logs table
+    tbl_name=f'f_orders'
+    updated_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    query4=f"""INSERT INTO logs.update_log(table_name,updated_at) VALUES ('{tbl_name}','{updated_at}')"""
+    dwh_engine.execute(query4)
     
 if __name__ == '__main__':
+    start=time.time()
+    
     config=ConfigParser()
     config.read('config.ini')
     runTime=datetime.now().strftime("%Y_%m_%d")
+    
     extract_data()
     transform_data()
     load_data()
+    
+    end=time.time()
+    print(f"--- Execution time: {end-start} seconds ---")
