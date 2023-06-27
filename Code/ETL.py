@@ -113,7 +113,7 @@ def transform_data():
     raw_file=f'raw_{runTime}.parquet'
     raw_data=pd.read_parquet(raw_file)
     
-    ## Drop column 'id'
+    ## Drop column 'no'
     raw_data=raw_data.drop(columns=['no'])
     
     # Remove duplicate values
