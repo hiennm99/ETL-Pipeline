@@ -219,9 +219,9 @@ def load_data():
         print("All records loaded successfully!!!")
         
     # Insert upload timestamp to update logs table
-    tbl_name=f'f_orders'
+    table_name=f'orders'
     updated_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    query4=f"""INSERT INTO logs.update_log(table_name,updated_at) VALUES ('{tbl_name}','{updated_at}')"""
+    query4=f"""INSERT INTO logs.update_log(table_name,updated_at) VALUES ('{table_name}','{updated_at}')"""
     dwh_engine.execute(query4)
     
 
