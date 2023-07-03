@@ -15,7 +15,7 @@ These instructions will get you a copy of the project up and running on your loc
 ### Prerequisites
 
 - Install [Docker](https://www.docker.com/)
-- Install [Docker Compose] ()
+- Install [Docker Compose] (abc)
 
 ### Usage
 
