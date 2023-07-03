@@ -15,7 +15,7 @@ These instructions will get you a copy of the project up and running on your loc
 ### Prerequisites
 
 - Install [Docker](https://www.docker.com/)
-- Install [Docker Compose](https://www.digitalocean.com/community/tutorials/how-to-install-and-use-docker-on-ubuntu-22-04)
+- Install [Docker Compose] ()
 
 ### Usage
 
