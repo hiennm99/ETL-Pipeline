@@ -8,7 +8,7 @@ x-airflow-common:
     AIRFLOW__CORE__EXECUTOR: CeleryExecutor
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
     # For backward compatibility, with Airflow <2.3
-    AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+    AIRFLOW__CORE__SQL_ALCHEMY_CONN: db+postgresql://airflow:airflow@postgres/airflow
     AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://airflow:airflow@postgres/airflow
     AIRFLOW__CELERY__BROKER_URL: redis://:@redis:6379/0
     AIRFLOW__CORE__FERNET_KEY: ''
@@ -25,17 +25,16 @@ x-airflow-common:
     &airflow-common-depends-on
     redis:
       condition: service_healthy
-    postgres:
-      condition: service_healthy
 
 services:
   postgres:
     image: postgres:13
-    container_name: postgres
     environment:
       POSTGRES_USER: airflow
       POSTGRES_PASSWORD: airflow
       POSTGRES_DB: airflow
+    ports:
+      - 5433:5432
     volumes:
       - postgres-db-volume:/var/lib/postgresql/data
     healthcheck:
@@ -43,6 +42,8 @@ services:
       interval: 5s
       retries: 5
     restart: always
+    networks:
+      - my-network
 
   redis:
     image: redis:latest
@@ -55,19 +56,23 @@ services:
       timeout: 30s
       retries: 50
     restart: always
+    networks:
+      - my-network
 
   airflow-webserver:
     <<: *airflow-common
     command: webserver
     container_name: airflow_webserver
     ports:
-      - 8080:8080
+      - 8085:8080
     healthcheck:
       test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
       interval: 10s
       timeout: 10s
       retries: 5
     restart: always
+    networks:
+      - my-network
     depends_on:
       <<: *airflow-common-depends-on
       airflow-init:
@@ -83,6 +88,8 @@ services:
       timeout: 10s
       retries: 5
     restart: always
+    networks:
+      - my-network
     depends_on:
       <<: *airflow-common-depends-on
       airflow-init:
@@ -105,6 +112,8 @@ services:
       # See https://airflow.apache.org/docs/docker-stack/entrypoint.html#signal-propagation
       DUMB_INIT_SETSID: "0"
     restart: always
+    networks:
+      - my-network
     depends_on:
       <<: *airflow-common-depends-on
       airflow-init:
@@ -120,6 +129,8 @@ services:
       timeout: 10s
       retries: 5
     restart: always
+    networks:
+      - my-network
     depends_on:
       <<: *airflow-common-depends-on
       airflow-init:
@@ -234,10 +245,13 @@ services:
       timeout: 10s
       retries: 5
     restart: always
+    networks:
+      - my-network
     depends_on:
       <<: *airflow-common-depends-on
       airflow-init:
         condition: service_completed_successfully
 
-volumes:
-  postgres-db-volume:
+networks:
+  my-network:
+    external: true
