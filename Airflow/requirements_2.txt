@@ -165,7 +165,6 @@ regex
 requests
 responses
 sqlalchemy
-
 snowflake-connector-python==3.0.2
 snowflake-sqlalchemy==1.4.7
 tableauserverclient
