@@ -53,4 +53,4 @@ redshift-connector==2.0.910
 regex
 requests
 responses
-sqlalchemy
+sqlalchemy==1.4
