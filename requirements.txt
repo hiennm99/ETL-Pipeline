@@ -75,3 +75,4 @@ requests
 responses
 SQLAlchemy==1.4.48
 beautifulsoup4==4.12.2
+pydantic==1.10.10
